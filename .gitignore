@@ -1,5 +1,5 @@
 /target
 /.temp
+/data
 
 AGENTS.md
-*.db
