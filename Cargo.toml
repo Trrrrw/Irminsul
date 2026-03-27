@@ -1,0 +1,9 @@
+[workspace]
+members = ["backend", "plugins/*", "shared"]
+resolver = "2"
+default-members = ["backend"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Trrrrw <wzhhenry@qq.com>"]
+edition = "2024"

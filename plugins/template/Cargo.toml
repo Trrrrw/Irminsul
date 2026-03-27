@@ -1,0 +1,11 @@
+[package]
+name = "template"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[[bin]]
+name = "plugin-template"
+path = "src/main.rs"
