@@ -1,5 +1,7 @@
 use salvo::{Listener, Server, conn::TcpListener};
 
+mod admin;
+mod audit;
 mod db;
 mod entities;
 mod error;

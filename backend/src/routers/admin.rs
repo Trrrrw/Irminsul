@@ -1,6 +1,6 @@
 use salvo::{Router, prelude::StaticDir};
 
-pub fn router() -> Router {
+pub fn static_router() -> Router {
     Router::with_path("admin/{**path}").get(
         StaticDir::new("panel/dist")
             .defaults("index.html")

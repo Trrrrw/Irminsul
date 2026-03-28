@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::entities::register_all;
+use crate::{admin, audit, entities};
 
 pub static SEAORM_POOL: OnceLock<DatabaseConnection> = OnceLock::new();
 
@@ -29,13 +29,16 @@ pub async fn init<P: AsRef<Path>>(path: P) {
         .await
         .expect("db connection should connect");
 
-    let builder = register_all(pool.get_schema_builder());
+    let builder = entities::register_all(pool.get_schema_builder());
+    let builder = admin::entities::register_all(builder);
+    let builder = audit::entities::register_all(builder);
     builder
         .sync(&pool)
         .await
         .expect("seaorm pool should be set");
 
     SEAORM_POOL.set(pool).expect("seaorm pool should be set");
+    admin::services::bootstrap::ensure_initial_owner().await;
 }
 
 pub fn pool() -> &'static DatabaseConnection {
