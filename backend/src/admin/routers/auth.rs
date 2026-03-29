@@ -5,7 +5,7 @@ use salvo::{
 };
 
 use crate::admin::{
-    dto::auth::{AcceptInvitationRequest, AuthResponse, CsrfTokenResponse, LoginRequest},
+    dto::auth::{AuthResponse, CsrfTokenResponse, LoginRequest, RegisterRequest},
     dto::users::AdminUserView,
     errors::render_api_error,
     middlewares::{
@@ -16,14 +16,14 @@ use crate::admin::{
         csrf::require_csrf,
         origin::require_same_origin,
     },
-    services::auth::{SESSION_TTL_SECONDS, accept_invitation, login, revoke_session, rotate_csrf},
+    services::auth::{SESSION_TTL_SECONDS, login, register, revoke_session, rotate_csrf},
 };
 
 pub fn router() -> Router {
     Router::with_path("api/admin/auth")
         .hoop(require_same_origin)
         .push(Router::with_path("login").post(login_handler))
-        .push(Router::with_path("accept-invitation").post(accept_invitation_handler))
+        .push(Router::with_path("register").post(register_handler))
         .push(
             Router::new()
                 .hoop(require_authenticated_admin)
@@ -87,21 +87,22 @@ async fn login_handler(req: &mut Request, res: &mut Response) {
     }
 }
 
-/// 接受邀请码并创建后台账号。
+/// 使用邀请码注册后台账号。
 ///
-/// 该接口用于“受邀页面”。用户只需提交邀请码，后端会创建一个带随机用户名和随机密码的账号，
-/// 然后自动登录。首次登录后必须通过“修改自己的资料”接口完善用户名和密码。
+/// 该接口用于“邀请码注册页”。用户需要提交邀请码、用户名、邮箱和密码。
+/// 后端验证邀请码后直接创建最终账号并自动登录。
 #[endpoint(
     tags("admin.auth"),
-    request_body = AcceptInvitationRequest,
+    request_body = RegisterRequest,
     responses(
-        (status_code = 200, description = "接受邀请码成功", body = AuthResponse),
+        (status_code = 200, description = "注册并登录成功", body = AuthResponse),
+        (status_code = 400, description = "请求参数无效或未通过密码策略"),
         (status_code = 403, description = "邀请码已失效或已过期"),
         (status_code = 404, description = "邀请码不存在")
     )
 )]
-async fn accept_invitation_handler(req: &mut Request, res: &mut Response) {
-    let Ok(payload) = req.parse_json::<AcceptInvitationRequest>().await else {
+async fn register_handler(req: &mut Request, res: &mut Response) {
+    let Ok(payload) = req.parse_json::<RegisterRequest>().await else {
         render_api_error(
             res,
             StatusCode::BAD_REQUEST,
@@ -111,7 +112,15 @@ async fn accept_invitation_handler(req: &mut Request, res: &mut Response) {
         return;
     };
 
-    match accept_invitation(req, &payload.invitation_token).await {
+    match register(
+        req,
+        &payload.invitation_token,
+        &payload.username,
+        &payload.email,
+        &payload.password,
+    )
+    .await
+    {
         Ok((user, session_token, csrf_token)) => {
             set_session_cookie(req, res, &session_token);
             res.render(Json(AuthResponse {
@@ -119,6 +128,19 @@ async fn accept_invitation_handler(req: &mut Request, res: &mut Response) {
                 csrf_token,
             }));
         }
+        Err(
+            "username_required"
+            | "email_required"
+            | "password_policy_failed"
+            | "username_taken"
+            | "email_taken"
+            | "user_creation_failed",
+        ) => render_api_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "registration_invalid",
+            "registration request is invalid",
+        ),
         Err("invitation_not_found") => render_api_error(
             res,
             StatusCode::NOT_FOUND,

@@ -28,10 +28,10 @@ pub fn root() -> Router {
     let admin_router = crate::admin::routers::router();
 
     let public_doc =
-        OpenApi::new("Irminsul Public API", env!("CARGO_PKG_VERSION")).merge_router(&public_router);
+        OpenApi::new("Irminsul API", env!("CARGO_PKG_VERSION")).merge_router(&public_router);
     let mut router = public_router
         .push(public_doc.into_router("/api-doc/public/openapi.json"))
-        .push(Scalar::new("/api-doc/public/openapi.json").into_router("docs/public"));
+        .push(Scalar::new("/api-doc/public/openapi.json").into_router("docs"));
 
     if cfg!(debug_assertions) {
         let admin_doc = OpenApi::new("Irminsul Admin API", env!("CARGO_PKG_VERSION"))

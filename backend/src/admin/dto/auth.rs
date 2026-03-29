@@ -10,8 +10,11 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct AcceptInvitationRequest {
+pub struct RegisterRequest {
     pub invitation_token: String,
+    pub username: String,
+    pub email: String,
+    pub password: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

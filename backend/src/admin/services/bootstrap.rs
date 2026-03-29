@@ -23,18 +23,23 @@ pub async fn ensure_initial_owner() {
         return;
     }
 
-    let username = std::env::var("IRMINSUL_ADMIN_OWNER_USERNAME")
-        .unwrap_or_else(|_| generate_temporary_username("owner"));
-    let password = match std::env::var("IRMINSUL_ADMIN_OWNER_PASSWORD") {
-        Ok(password) => {
+    let env_username = std::env::var("IRMINSUL_ADMIN_OWNER_USERNAME").ok();
+    let env_password = std::env::var("IRMINSUL_ADMIN_OWNER_PASSWORD").ok();
+    let username = env_username
+        .clone()
+        .unwrap_or_else(|| generate_temporary_username("owner"));
+    let password = match env_password.clone() {
+        Some(password) => {
             crate::admin::password::validate_password(&password)
                 .expect("IRMINSUL_ADMIN_OWNER_PASSWORD does not satisfy password policy");
             password
         }
-        Err(_) => generate_temporary_password(),
+        None => generate_temporary_password(),
     };
     let password_hash = hash_password(&password).expect("initial owner password should hash");
     let now = crate::admin::middlewares::auth::unix_timestamp();
+    let must_change_username = env_username.is_none();
+    let must_change_password = env_password.is_none();
 
     let owner = users::ActiveModel {
         username: Set(username.clone()),
@@ -42,8 +47,8 @@ pub async fn ensure_initial_owner() {
         password_hash: Set(password_hash),
         role: Set(AdminRole::Owner),
         status: Set(AdminUserStatus::Active),
-        must_change_password: Set(false),
-        must_change_username: Set(false),
+        must_change_password: Set(must_change_password),
+        must_change_username: Set(must_change_username),
         must_set_email: Set(true),
         last_login_at: Set(None),
         created_at: Set(now),
@@ -58,5 +63,16 @@ pub async fn ensure_initial_owner() {
     println!("Initial owner account created.");
     println!("Username: {username}");
     println!("Password: {password}");
-    println!("The first login must set an email address.");
+    if must_change_username || must_change_password {
+        println!("The first login must complete account initialization:");
+        if must_change_username {
+            println!("- Change the username");
+        }
+        if must_change_password {
+            println!("- Change the password");
+        }
+        println!("- Set an email address");
+    } else {
+        println!("The first login must set an email address.");
+    }
 }

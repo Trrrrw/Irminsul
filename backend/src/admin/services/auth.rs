@@ -9,10 +9,7 @@ use crate::{
         entities::{invitations, sessions, users},
         middlewares::auth::unix_timestamp,
         model::{AdminUserStatus, InvitationStatus},
-        password::{
-            generate_temporary_password, generate_temporary_username, hash_password,
-            verify_password,
-        },
+        password::{hash_password, verify_password},
         services::{audit::write_audit_log, rate_limit},
         token::{generate_token, hash_token},
     },
@@ -81,9 +78,12 @@ pub async fn login(
     Ok((user, session_token, csrf_token))
 }
 
-pub async fn accept_invitation(
+pub async fn register(
     req: &Request,
     invitation_token: &str,
+    username: &str,
+    email: &str,
+    password: &str,
 ) -> Result<(users::Model, String, String), &'static str> {
     let pool = db::pool();
     let token_hash = hash_token(invitation_token);
@@ -108,17 +108,37 @@ pub async fn accept_invitation(
         return Err("invitation_expired");
     }
 
-    let username = generate_temporary_username("pending-user");
-    let password_hash =
-        hash_password(&generate_temporary_password()).expect("temporary password should hash");
+    let normalized_username = normalize_username(username)?;
+    let normalized_email = normalize_email(email)?;
+    let password_hash = hash_password(password).map_err(|_| "password_policy_failed")?;
+    if users::Entity::find()
+        .filter(users::Column::Username.eq(normalized_username.clone()))
+        .one(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return Err("username_taken");
+    }
+    if users::Entity::find()
+        .filter(users::Column::Email.eq(normalized_email.clone()))
+        .one(pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return Err("email_taken");
+    }
     let user = users::ActiveModel {
-        username: Set(username),
-        email: Set(None),
+        username: Set(normalized_username),
+        email: Set(Some(normalized_email)),
         password_hash: Set(password_hash),
         role: Set(invitation.role.clone()),
         status: Set(AdminUserStatus::Active),
-        must_change_password: Set(true),
-        must_change_username: Set(true),
+        must_change_password: Set(false),
+        must_change_username: Set(false),
         must_set_email: Set(false),
         last_login_at: Set(Some(now)),
         created_at: Set(now),
@@ -140,10 +160,10 @@ pub async fn accept_invitation(
     write_audit_log(
         Some(user.id),
         Some(user.username.clone()),
-        "accept_invitation",
+        "register_by_invitation",
         "admin_user",
         Some(user.id.to_string()),
-        "created admin user from invitation",
+        "registered admin user with invitation",
         Some(serde_json::json!({
             "role": user.role,
         })),
@@ -215,4 +235,20 @@ pub fn client_ip(req: &Request) -> Option<String> {
 
 pub fn user_agent(req: &Request) -> Option<String> {
     req.header::<String>("user-agent")
+}
+
+fn normalize_username(value: &str) -> Result<String, &'static str> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err("username_required");
+    }
+    Ok(normalized)
+}
+
+fn normalize_email(value: &str) -> Result<String, &'static str> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err("email_required");
+    }
+    Ok(normalized)
 }
