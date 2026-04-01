@@ -1,14 +1,12 @@
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
 
-use crate::{
-    admin::{
-        dto::invitations::InvitationView,
-        entities::invitations,
-        model::{AdminRole, InvitationStatus},
-        services::audit::write_audit_log,
-        token::{generate_token, hash_token},
-    },
+use crate::admin::{
     db,
+    dto::invitations::InvitationView,
+    entities::invitations,
+    model::{AdminRole, InvitationStatus},
+    services::audit::write_audit_log,
+    token::{generate_token, hash_token},
 };
 
 pub async fn create_invitation(

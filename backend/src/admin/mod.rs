@@ -1,3 +1,4 @@
+pub mod db;
 pub mod dto;
 pub mod entities;
 pub mod errors;

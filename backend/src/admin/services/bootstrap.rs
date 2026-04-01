@@ -1,12 +1,10 @@
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 
-use crate::{
-    admin::{
-        entities::users,
-        model::{AdminRole, AdminUserStatus},
-        password::{generate_temporary_password, generate_temporary_username, hash_password},
-    },
+use crate::admin::{
     db,
+    entities::users,
+    model::{AdminRole, AdminUserStatus},
+    password::{generate_temporary_password, generate_temporary_username, hash_password},
 };
 
 /// 确保系统至少存在一个 owner 账号。

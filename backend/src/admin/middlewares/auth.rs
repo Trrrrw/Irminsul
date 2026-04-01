@@ -1,13 +1,11 @@
 use salvo::prelude::*;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-use crate::{
-    admin::{
-        entities::{sessions, users},
-        model::{AdminRole, AdminUserStatus},
-        services::auth::{client_ip, user_agent},
-    },
+use crate::admin::{
     db,
+    entities::{sessions, users},
+    model::{AdminRole, AdminUserStatus},
+    services::auth::{client_ip, user_agent},
 };
 
 pub const ADMIN_SESSION_COOKIE: &str = "irminsul_admin_session";

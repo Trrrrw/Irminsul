@@ -3,15 +3,13 @@ use sea_orm::{
     QueryFilter,
 };
 
-use crate::{
-    admin::{
-        dto::users::{AdminUserView, UpdateSelfProfileRequest},
-        entities::users,
-        model::{AdminRole, AdminUserStatus},
-        password::{hash_password, verify_password},
-        services::audit::write_audit_log,
-    },
+use crate::admin::{
     db,
+    dto::users::{AdminUserView, UpdateSelfProfileRequest},
+    entities::users,
+    model::{AdminRole, AdminUserStatus},
+    password::{hash_password, verify_password},
+    services::audit::write_audit_log,
 };
 
 pub async fn list_users() -> Vec<AdminUserView> {

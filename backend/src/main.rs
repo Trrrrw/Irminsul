@@ -3,15 +3,15 @@ use salvo::{Listener, Server, conn::TcpListener};
 mod admin;
 mod audit;
 mod db;
-mod entities;
 mod error;
+mod games;
 mod models;
 mod routers;
 
 #[tokio::main]
 async fn main() {
     // 初始化数据库连接
-    db::init("./data/irminsul.db").await;
+    db::init("./data").await;
 
     // 初始化日志子系统
     tracing_subscriber::fmt::init();

@@ -1,7 +1,10 @@
 use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde_json::Value;
 
-use crate::audit::{entities::logs, model::AuditActorType};
+use crate::{
+    admin::{db, entities::audit_logs},
+    audit::model::AuditActorType,
+};
 
 /// 审计日志写入参数。
 #[derive(Debug, Clone)]
@@ -19,7 +22,7 @@ pub struct AuditLogParams {
 }
 
 pub async fn write_audit_log(params: AuditLogParams) {
-    let log = logs::ActiveModel {
+    let log = audit_logs::ActiveModel {
         actor_type: Set(params.actor_type),
         actor_user_id: Set(params.actor_user_id),
         actor_label: Set(params.actor_label),
@@ -33,5 +36,5 @@ pub async fn write_audit_log(params: AuditLogParams) {
         created_at: Set(crate::admin::middlewares::auth::unix_timestamp()),
         ..Default::default()
     };
-    let _ = log.insert(crate::db::pool()).await;
+    let _ = log.insert(db::pool()).await;
 }
