@@ -27,9 +27,9 @@ pub fn router() -> Router {
         .push(Router::with_path("<id>").hoop(require_csrf).delete(revoke))
 }
 
-/// 获取邀请码列表。
+/// 获取邀请码列表
 ///
-/// 仅 `owner` 可调用。返回当前后台邀请码的状态列表，便于面板展示和管理。
+/// 仅 `owner` 可调用。返回当前后台邀请码的状态列表，便于面板展示和管理
 #[endpoint(
     tags("admin.invitations"),
     responses(
@@ -50,9 +50,9 @@ async fn list(depot: &mut Depot, res: &mut Response) {
     res.render(Json(list_invitations().await));
 }
 
-/// 创建后台邀请码。
+/// 创建后台邀请码
 ///
-/// 仅 `owner` 可调用。邀请码用于“受邀页面”开户，不直接作为普通登录密码使用。
+/// 仅 `owner` 可调用。邀请码用于“受邀页面”开户，不直接作为普通登录密码使用
 #[endpoint(
     tags("admin.invitations"),
     request_body = CreateInvitationRequest,
@@ -131,9 +131,9 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     }
 }
 
-/// 撤销邀请码。
+/// 撤销邀请码
 ///
-/// 仅 `owner` 可调用。只有 `pending` 状态的邀请码允许被撤销。
+/// 仅 `owner` 可调用。只有 `pending` 状态的邀请码允许被撤销
 #[endpoint(
     tags("admin.invitations"),
     responses(

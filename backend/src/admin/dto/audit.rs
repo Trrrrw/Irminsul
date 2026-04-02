@@ -1,24 +1,18 @@
-use crate::audit::model::AuditActorType;
+use salvo::oapi::ToSchema;
+use serde::Serialize;
 
-/// 审计日志记录。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Model {
-    // === 自增主键 ===
+/// 审计日志视图。
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct AuditLogView {
     pub id: i64,
-
-    // === 操作者信息 ===
-    pub actor_type: AuditActorType,
+    pub actor_type: String,
     pub actor_user_id: Option<i64>,
     pub actor_label: Option<String>,
-
-    // === 操作目标 ===
     pub action: String,
     pub target_type: String,
     pub target_id: Option<String>,
     pub summary: String,
     pub metadata_json: Option<String>,
-
-    // === 请求上下文 ===
     pub ip: Option<String>,
     pub user_agent: Option<String>,
     pub created_at: i64,

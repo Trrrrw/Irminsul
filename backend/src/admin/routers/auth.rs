@@ -33,10 +33,10 @@ pub fn router() -> Router {
         )
 }
 
-/// 管理员账号登录。
+/// 管理员账号登录
 ///
 /// 使用用户名或邮箱加密码登录后台。登录成功后会设置 HttpOnly session cookie，
-/// 并返回后续写请求必须携带的 CSRF token。
+/// 并返回后续写请求必须携带的 CSRF token
 #[endpoint(
     tags("admin.auth"),
     request_body = LoginRequest,
@@ -87,10 +87,10 @@ async fn login_handler(req: &mut Request, res: &mut Response) {
     }
 }
 
-/// 使用邀请码注册后台账号。
+/// 使用邀请码注册后台账号
 ///
-/// 该接口用于“邀请码注册页”。用户需要提交邀请码、用户名、邮箱和密码。
-/// 后端验证邀请码后直接创建最终账号并自动登录。
+/// 该接口用于“邀请码注册页”。用户需要提交邀请码、用户名、邮箱和密码
+/// 后端验证邀请码后直接创建最终账号并自动登录
 #[endpoint(
     tags("admin.auth"),
     request_body = RegisterRequest,
@@ -162,9 +162,9 @@ async fn register_handler(req: &mut Request, res: &mut Response) {
     }
 }
 
-/// 获取当前已登录管理员的信息。
+/// 获取当前已登录管理员的信息
 ///
-/// 前端可在应用启动后调用此接口判断当前是否已登录，以及当前账号是否仍需补全资料。
+/// 前端可在应用启动后调用此接口判断当前是否已登录，以及当前账号是否仍需补全资料
 #[endpoint(
     tags("admin.auth"),
     responses(
@@ -195,9 +195,9 @@ async fn me(depot: &mut Depot, res: &mut Response) {
     }));
 }
 
-/// 刷新当前会话的 CSRF token。
+/// 刷新当前会话的 CSRF token
 ///
-/// 所有后台写请求都必须携带 `X-CSRF-Token` 请求头。前端可在登录后或 token 失效时调用此接口。
+/// 所有后台写请求都必须携带 `X-CSRF-Token` 请求头。前端可在登录后或 token 失效时调用此接口
 #[endpoint(
     tags("admin.auth"),
     responses(
@@ -223,9 +223,9 @@ async fn issue_csrf_token(req: &mut Request, depot: &mut Depot, res: &mut Respon
     res.render(Json(CsrfTokenResponse { csrf_token }));
 }
 
-/// 注销当前后台会话。
+/// 注销当前后台会话
 ///
-/// 该接口会撤销当前 session，并清除浏览器中的 session cookie。
+/// 该接口会撤销当前 session，并清除浏览器中的 session cookie
 #[endpoint(
     tags("admin.auth"),
     responses(

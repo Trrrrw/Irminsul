@@ -1,14 +1,12 @@
+use std::str::FromStr;
+
 use salvo::Request;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, IntoActiveModel,
-    QueryFilter,
-};
 
 use crate::admin::{
     db,
     entities::{invitations, sessions, users},
     middlewares::auth::unix_timestamp,
-    model::{AdminUserStatus, InvitationStatus},
+    model::{AdminRole, AdminUserStatus, InvitationStatus},
     password::{hash_password, verify_password},
     services::{audit::write_audit_log, rate_limit},
     token::{generate_token, hash_token},
@@ -16,6 +14,7 @@ use crate::admin::{
 
 pub const SESSION_TTL_SECONDS: i64 = 60 * 60 * 24 * 14;
 
+/// 管理员登录，并在成功后创建会话。
 pub async fn login(
     identifier: &str,
     password: &str,
@@ -28,18 +27,8 @@ pub async fn login(
         return Err("too_many_attempts");
     }
 
-    let pool = db::pool();
-    let Some(user) = users::Entity::find()
-        .filter(
-            Condition::any()
-                .add(users::Column::Username.eq(normalized_identifier.clone()))
-                .add(users::Column::Email.eq(normalized_identifier.clone())),
-        )
-        .one(pool)
-        .await
-        .ok()
-        .flatten()
-    else {
+    let conn = db::database().connect().map_err(|_| "db_unavailable")?;
+    let Some(user) = find_user_by_identifier(&conn, &normalized_identifier).await else {
         rate_limit::record_login_failure(&normalized_identifier, ip.as_deref(), now);
         return Err("invalid_credentials");
     };
@@ -54,11 +43,12 @@ pub async fn login(
 
     rate_limit::clear_login_failures(&normalized_identifier, ip.as_deref());
     let (session_token, csrf_token) = create_session_record(user.id, req).await;
-
-    let mut active_user = user.clone().into_active_model();
-    active_user.last_login_at = Set(Some(now));
-    active_user.updated_at = Set(now);
-    let _ = active_user.update(pool).await;
+    let _ = conn
+        .execute(
+            "UPDATE ADMIN_USERS SET last_login_at = ?1, updated_at = ?1 WHERE id = ?2",
+            turso::params![now, user.id],
+        )
+        .await;
 
     write_audit_log(
         Some(user.id),
@@ -76,6 +66,7 @@ pub async fn login(
     Ok((user, session_token, csrf_token))
 }
 
+/// 通过邀请码注册后台账号。
 pub async fn register(
     req: &Request,
     invitation_token: &str,
@@ -83,15 +74,9 @@ pub async fn register(
     email: &str,
     password: &str,
 ) -> Result<(users::Model, String, String), &'static str> {
-    let pool = db::pool();
+    let conn = db::database().connect().map_err(|_| "db_unavailable")?;
     let token_hash = hash_token(invitation_token);
-    let Some(invitation) = invitations::Entity::find()
-        .filter(invitations::Column::TokenHash.eq(token_hash))
-        .one(pool)
-        .await
-        .ok()
-        .flatten()
-    else {
+    let Some(invitation) = find_invitation_by_token_hash(&conn, &token_hash).await else {
         return Err("invitation_not_found");
     };
 
@@ -100,60 +85,63 @@ pub async fn register(
         return Err("invitation_invalid");
     }
     if invitation.expires_at <= now {
-        let mut expired = invitation.clone().into_active_model();
-        expired.status = Set(InvitationStatus::Expired);
-        let _ = expired.update(pool).await;
+        let _ = conn
+            .execute(
+                "UPDATE ADMIN_INVITATIONS SET status = ?1 WHERE id = ?2",
+                turso::params![InvitationStatus::Expired.as_str(), invitation.id],
+            )
+            .await;
         return Err("invitation_expired");
     }
 
     let normalized_username = normalize_username(username)?;
     let normalized_email = normalize_email(email)?;
     let password_hash = hash_password(password).map_err(|_| "password_policy_failed")?;
-    if users::Entity::find()
-        .filter(users::Column::Username.eq(normalized_username.clone()))
-        .one(pool)
+
+    if find_user_by_username(&conn, &normalized_username)
         .await
-        .ok()
-        .flatten()
         .is_some()
     {
         return Err("username_taken");
     }
-    if users::Entity::find()
-        .filter(users::Column::Email.eq(normalized_email.clone()))
-        .one(pool)
-        .await
-        .ok()
-        .flatten()
-        .is_some()
-    {
+    if find_user_by_email(&conn, &normalized_email).await.is_some() {
         return Err("email_taken");
     }
-    let user = users::ActiveModel {
-        username: Set(normalized_username),
-        email: Set(Some(normalized_email)),
-        password_hash: Set(password_hash),
-        role: Set(invitation.role.clone()),
-        status: Set(AdminUserStatus::Active),
-        must_change_password: Set(false),
-        must_change_username: Set(false),
-        must_set_email: Set(false),
-        last_login_at: Set(Some(now)),
-        created_at: Set(now),
-        updated_at: Set(now),
-        ..Default::default()
-    };
 
-    let user = user
-        .insert(pool)
+    conn.execute(
+        "INSERT INTO ADMIN_USERS
+         (username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, ?6, ?6, ?6)",
+        turso::params![
+            normalized_username,
+            Some(normalized_email),
+            password_hash,
+            invitation.role.as_str(),
+            AdminUserStatus::Active.as_str(),
+            now,
+        ],
+    )
+    .await
+    .map_err(|_| "user_creation_failed")?;
+
+    let user_id = conn.last_insert_rowid();
+    let user = find_user_by_id(&conn, user_id)
         .await
-        .map_err(|_| "user_creation_failed")?;
+        .ok_or("user_creation_failed")?;
 
-    let mut invitation = invitation.into_active_model();
-    invitation.status = Set(InvitationStatus::Consumed);
-    invitation.consumed_at = Set(Some(now));
-    invitation.consumed_by_user_id = Set(Some(user.id));
-    let _ = invitation.update(pool).await;
+    let _ = conn
+        .execute(
+            "UPDATE ADMIN_INVITATIONS
+             SET status = ?1, consumed_at = ?2, consumed_by_user_id = ?3
+             WHERE id = ?4",
+            turso::params![
+                InvitationStatus::Consumed.as_str(),
+                Some(now),
+                Some(user.id),
+                invitation.id,
+            ],
+        )
+        .await;
 
     write_audit_log(
         Some(user.id),
@@ -163,7 +151,7 @@ pub async fn register(
         Some(user.id.to_string()),
         "registered admin user with invitation",
         Some(serde_json::json!({
-            "role": user.role,
+            "role": user.role.as_str(),
         })),
         client_ip(req),
         user_agent(req),
@@ -174,21 +162,33 @@ pub async fn register(
     Ok((user, session_token, csrf_token))
 }
 
+/// 刷新当前会话的 CSRF token。
 pub async fn rotate_csrf(session: &sessions::Model, req: &Request) -> String {
     let csrf_token = generate_token(32);
-    let mut active_session = session.clone().into_active_model();
-    active_session.csrf_token_hash = Set(hash_token(&csrf_token));
-    active_session.updated_at = Set(unix_timestamp());
-    active_session.last_seen_at = Set(unix_timestamp());
-    active_session.last_seen_ip = Set(client_ip(req));
-    let _ = active_session.update(db::pool()).await;
+    let now = unix_timestamp();
+    if let Ok(conn) = db::database().connect() {
+        let _ = conn
+            .execute(
+                "UPDATE ADMIN_SESSIONS
+                 SET csrf_token_hash = ?1, updated_at = ?2, last_seen_at = ?2, last_seen_ip = ?3
+                 WHERE id = ?4",
+                turso::params![hash_token(&csrf_token), now, client_ip(req), session.id],
+            )
+            .await;
+    }
     csrf_token
 }
 
+/// 撤销当前会话。
 pub async fn revoke_session(session: &sessions::Model, actor_user_id: Option<i64>, req: &Request) {
-    let mut active_session = session.clone().into_active_model();
-    active_session.revoked_at = Set(Some(unix_timestamp()));
-    let _ = active_session.update(db::pool()).await;
+    if let Ok(conn) = db::database().connect() {
+        let _ = conn
+            .execute(
+                "UPDATE ADMIN_SESSIONS SET revoked_at = ?1, updated_at = ?1 WHERE id = ?2",
+                turso::params![unix_timestamp(), session.id],
+            )
+            .await;
+    }
 
     write_audit_log(
         actor_user_id,
@@ -204,25 +204,29 @@ pub async fn revoke_session(session: &sessions::Model, actor_user_id: Option<i64
     .await;
 }
 
+/// 创建后台会话记录。
 pub async fn create_session_record(admin_user_id: i64, req: &Request) -> (String, String) {
     let session_token = generate_token(48);
     let csrf_token = generate_token(32);
     let now = unix_timestamp();
-    let session = sessions::ActiveModel {
-        admin_user_id: Set(admin_user_id),
-        token_hash: Set(hash_token(&session_token)),
-        csrf_token_hash: Set(hash_token(&csrf_token)),
-        created_at: Set(now),
-        updated_at: Set(now),
-        expires_at: Set(now + SESSION_TTL_SECONDS),
-        last_seen_at: Set(now),
-        revoked_at: Set(None),
-        created_ip: Set(client_ip(req)),
-        last_seen_ip: Set(client_ip(req)),
-        user_agent: Set(user_agent(req)),
-        ..Default::default()
-    };
-    let _ = session.insert(db::pool()).await;
+    if let Ok(conn) = db::database().connect() {
+        let _ = conn
+            .execute(
+                "INSERT INTO ADMIN_SESSIONS
+                 (admin_user_id, token_hash, csrf_token_hash, created_at, updated_at, expires_at, last_seen_at, revoked_at, created_ip, last_seen_ip, user_agent)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?4, NULL, ?6, ?6, ?7)",
+                turso::params![
+                    admin_user_id,
+                    hash_token(&session_token),
+                    hash_token(&csrf_token),
+                    now,
+                    now + SESSION_TTL_SECONDS,
+                    client_ip(req),
+                    user_agent(req),
+                ],
+            )
+            .await;
+    }
     (session_token, csrf_token)
 }
 
@@ -233,6 +237,120 @@ pub fn client_ip(req: &Request) -> Option<String> {
 
 pub fn user_agent(req: &Request) -> Option<String> {
     req.header::<String>("user-agent")
+}
+
+async fn find_user_by_identifier(
+    conn: &turso::Connection,
+    identifier: &str,
+) -> Option<users::Model> {
+    let mut rows = conn
+        .query(
+            "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
+             FROM ADMIN_USERS
+             WHERE username = ?1 OR email = ?1
+             LIMIT 1",
+            turso::params![identifier.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok().flatten()?;
+    map_user_row(&row).ok()
+}
+
+async fn find_user_by_username(conn: &turso::Connection, username: &str) -> Option<users::Model> {
+    let mut rows = conn
+        .query(
+            "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
+             FROM ADMIN_USERS WHERE username = ?1 LIMIT 1",
+            turso::params![username.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok().flatten()?;
+    map_user_row(&row).ok()
+}
+
+async fn find_user_by_email(conn: &turso::Connection, email: &str) -> Option<users::Model> {
+    let mut rows = conn
+        .query(
+            "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
+             FROM ADMIN_USERS WHERE email = ?1 LIMIT 1",
+            turso::params![email.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok().flatten()?;
+    map_user_row(&row).ok()
+}
+
+async fn find_user_by_id(conn: &turso::Connection, user_id: i64) -> Option<users::Model> {
+    let mut rows = conn
+        .query(
+            "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
+             FROM ADMIN_USERS WHERE id = ?1 LIMIT 1",
+            turso::params![user_id],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok().flatten()?;
+    map_user_row(&row).ok()
+}
+
+async fn find_invitation_by_token_hash(
+    conn: &turso::Connection,
+    token_hash: &str,
+) -> Option<invitations::Model> {
+    let mut rows = conn
+        .query(
+            "SELECT id, token_hash, role, status, invited_email, note, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id
+             FROM ADMIN_INVITATIONS WHERE token_hash = ?1 LIMIT 1",
+            turso::params![token_hash.to_string()],
+        )
+        .await
+        .ok()?;
+    let row = rows.next().await.ok().flatten()?;
+    map_invitation_row(&row).ok()
+}
+
+fn map_user_row(row: &turso::Row) -> Result<users::Model, String> {
+    Ok(users::Model {
+        id: row.get(0).map_err(|error| error.to_string())?,
+        username: row.get(1).map_err(|error| error.to_string())?,
+        email: row.get(2).map_err(|error| error.to_string())?,
+        password_hash: row.get(3).map_err(|error| error.to_string())?,
+        role: AdminRole::from_str(&row.get::<String>(4).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?,
+        status: AdminUserStatus::from_str(
+            &row.get::<String>(5).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?,
+        must_change_password: row.get::<i64>(6).map_err(|error| error.to_string())? != 0,
+        must_change_username: row.get::<i64>(7).map_err(|error| error.to_string())? != 0,
+        must_set_email: row.get::<i64>(8).map_err(|error| error.to_string())? != 0,
+        last_login_at: row.get(9).map_err(|error| error.to_string())?,
+        created_at: row.get(10).map_err(|error| error.to_string())?,
+        updated_at: row.get(11).map_err(|error| error.to_string())?,
+    })
+}
+
+fn map_invitation_row(row: &turso::Row) -> Result<invitations::Model, String> {
+    Ok(invitations::Model {
+        id: row.get(0).map_err(|error| error.to_string())?,
+        token_hash: row.get(1).map_err(|error| error.to_string())?,
+        role: AdminRole::from_str(&row.get::<String>(2).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?,
+        status: InvitationStatus::from_str(
+            &row.get::<String>(3).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?,
+        invited_email: row.get(4).map_err(|error| error.to_string())?,
+        note: row.get(5).map_err(|error| error.to_string())?,
+        created_by_user_id: row.get(6).map_err(|error| error.to_string())?,
+        created_at: row.get(7).map_err(|error| error.to_string())?,
+        expires_at: row.get(8).map_err(|error| error.to_string())?,
+        consumed_at: row.get(9).map_err(|error| error.to_string())?,
+        consumed_by_user_id: row.get(10).map_err(|error| error.to_string())?,
+    })
 }
 
 fn normalize_username(value: &str) -> Result<String, &'static str> {

@@ -2,11 +2,12 @@ use salvo::{Listener, Server, conn::TcpListener};
 
 mod admin;
 mod audit;
+mod content;
 mod db;
 mod error;
-mod games;
 mod models;
 mod routers;
+mod vector;
 
 #[tokio::main]
 async fn main() {

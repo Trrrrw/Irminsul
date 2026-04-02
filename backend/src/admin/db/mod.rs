@@ -1,33 +1,35 @@
-use sea_orm::entity::prelude::DatabaseConnection;
-use sea_orm::{ConnectOptions, Database};
 use std::path::Path;
 use std::sync::OnceLock;
-use std::time::Duration;
 
-use crate::admin;
+use turso::{Builder, Database};
 
-pub static ADMIN_POOL: OnceLock<DatabaseConnection> = OnceLock::new();
+mod schema;
 
+/// 管理后台数据库实例。
+static ADMIN_DB: OnceLock<Database> = OnceLock::new();
+
+/// 初始化后台数据库，并同步后台所需的全部表结构。
 pub async fn init<P: AsRef<Path>>(path: P) {
-    let url = format!("sqlite://{}?mode=rwc", path.as_ref().to_str().unwrap());
-    let mut opt = ConnectOptions::new(url);
-    opt.max_connections(100)
-        .min_connections(5)
-        .connect_timeout(Duration::from_secs(8))
-        .idle_timeout(Duration::from_secs(8))
-        .sqlx_logging(false);
-
-    let pool = Database::connect(opt)
+    let db = Builder::new_local(path.as_ref().to_string_lossy().as_ref())
+        .build()
         .await
-        .expect("admin db connection should connect");
+        .expect("admin db should connect");
+    let conn = db.connect().expect("admin db connection should open");
+    conn.execute("PRAGMA foreign_keys = ON", ())
+        .await
+        .expect("admin db should enable foreign keys");
 
-    let builder = admin::entities::register_all(pool.get_schema_builder());
-    builder.sync(&pool).await.expect("admin pool should be set");
+    for statement in schema::SCHEMA_STATEMENTS {
+        conn.execute(statement, ())
+            .await
+            .unwrap_or_else(|error| panic!("admin db schema should sync: {error}"));
+    }
 
-    ADMIN_POOL.set(pool).expect("admin pool should be set");
-    admin::services::bootstrap::ensure_initial_owner().await;
+    ADMIN_DB.set(db).expect("admin db should be set");
+    crate::admin::services::bootstrap::ensure_initial_owner().await;
 }
 
-pub fn pool() -> &'static DatabaseConnection {
-    ADMIN_POOL.get().expect("admin pool should set")
+/// 返回后台数据库实例。
+pub fn database() -> &'static Database {
+    ADMIN_DB.get().expect("admin db should be set")
 }

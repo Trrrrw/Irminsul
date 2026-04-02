@@ -1,24 +1,22 @@
-use sea_orm::entity::prelude::*;
-
 use crate::admin::model::{AdminRole, InvitationStatus};
 
-#[sea_orm::model]
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "ADMIN_INVITATIONS")]
+/// 管理后台邀请码记录。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Model {
-    #[sea_orm(primary_key, auto_increment = true)]
+    // === 自增主键 ===
     pub id: i64,
-    #[sea_orm(unique)]
+
+    // === 邀请码主体 ===
     pub token_hash: String,
     pub role: AdminRole,
     pub status: InvitationStatus,
     pub invited_email: Option<String>,
     pub note: Option<String>,
+
+    // === 审计信息 ===
     pub created_by_user_id: i64,
     pub created_at: i64,
     pub expires_at: i64,
     pub consumed_at: Option<i64>,
     pub consumed_by_user_id: Option<i64>,
 }
-
-impl ActiveModelBehavior for ActiveModel {}

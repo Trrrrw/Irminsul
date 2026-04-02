@@ -32,9 +32,9 @@ pub fn router() -> Router {
         )
 }
 
-/// 获取管理员列表。
+/// 获取管理员列表
 ///
-/// 仅 `owner` 可调用。用于后台展示管理员账号及其当前状态。
+/// 仅 `owner` 可调用。用于后台展示管理员账号及其当前状态
 #[endpoint(
     tags("admin.users"),
     responses(
@@ -55,13 +55,13 @@ async fn list(depot: &mut Depot, res: &mut Response) {
     res.render(Json(list_users().await));
 }
 
-/// 更新当前管理员自己的资料。
+/// 更新当前管理员自己的资料
 ///
 /// 该接口同时承担首次登录后的资料完善流程：
 /// - 首个 `owner` 首次登录后必须补邮箱
 /// - 通过邀请码创建的用户首次登录后必须修改用户名和密码
 ///
-/// 普通已登录用户修改密码时需要提供 `current_password`。
+/// 普通已登录用户修改密码时需要提供 `current_password`
 #[endpoint(
     tags("admin.users"),
     request_body = UpdateSelfProfileRequest,
@@ -159,7 +159,7 @@ async fn update_me(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     }
 }
 
-/// 启用或禁用指定管理员账号。
+/// 启用或禁用指定管理员账号
 ///
 /// 仅 `owner` 可调用。当前实现禁止：
 /// - 禁用自己
