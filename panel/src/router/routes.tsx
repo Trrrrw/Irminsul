@@ -9,7 +9,6 @@ import { DashboardLayout } from "@/layouts/dashboard-layout";
 import { ApiTesterPage } from "@/pages/api-tester-page";
 import { NotFoundPage } from "@/pages/not-found-page";
 import { OverviewPage } from "@/pages/overview-page";
-import { SettingsPage } from "@/pages/settings-page";
 
 export const appRoutes: RouteObject[] = [
   {
@@ -36,10 +35,6 @@ export const appRoutes: RouteObject[] = [
           {
             path: "api-tester",
             element: <ApiTesterPage />,
-          },
-          {
-            path: "settings",
-            element: <SettingsPage />,
           },
           {
             path: "*",

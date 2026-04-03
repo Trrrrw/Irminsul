@@ -1,4 +1,4 @@
-import { LayoutDashboard, Settings, TestTubeDiagonal, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, TestTubeDiagonal, type LucideIcon } from "lucide-react";
 
 export type NavItem = {
   title: string;
@@ -16,10 +16,5 @@ export const navItems: NavItem[] = [
     title: "接口测试",
     to: "/api-tester",
     icon: TestTubeDiagonal,
-  },
-  {
-    title: "系统设置",
-    to: "/settings",
-    icon: Settings,
   },
 ];

@@ -2,22 +2,17 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { LoaderCircle, Save } from "lucide-react";
 
+import {
+  AdminSessionProvider,
+  mapAdminProfileErrorMessage,
+  useAdminSession,
+  type AdminUser,
+} from "@/components/app/admin-session-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-
-const CSRF_STORAGE_KEY = "irminsul.admin.csrf-token";
-
-type AdminUser = {
-  id: number;
-  username: string;
-  email: string | null;
-  must_change_password: boolean;
-  must_change_username: boolean;
-  must_set_email: boolean;
-};
 
 type AuthCheckState =
   | { status: "loading" }
@@ -28,11 +23,8 @@ type AuthCheckState =
 type ProfileFormState = {
   username: string;
   email: string;
+  currentPassword: string;
   newPassword: string;
-};
-
-type CsrfResponse = {
-  csrf_token?: string;
 };
 
 function requiresProfileSetup(user: AdminUser) {
@@ -43,43 +35,9 @@ function requiresEmail(user: AdminUser) {
   return user.must_set_email || !user.email;
 }
 
-function mapProfileSetupErrorMessage(message?: string) {
-  switch (message) {
-    case "username change is required":
-      return "请修改用户名后再继续。";
-    case "username is required":
-      return "请输入用户名。";
-    case "password change is required":
-      return "请设置新密码后再继续。";
-    case "email is required":
-      return "请输入邮箱。";
-    case "current password is required":
-      return "当前密码不能为空。";
-    case "current password is invalid":
-      return "当前密码不正确。";
-    case "password does not satisfy the policy":
-      return "密码不符合后端校验规则。";
-    case "failed to update profile":
-      return "资料更新失败，请检查是否与现有账户冲突。";
-    case "authentication required":
-      return "登录已失效，请重新登录。";
-    case "invalid JSON payload":
-      return "请求格式不正确。";
-    default:
-      return message ?? "资料更新失败，请稍后重试。";
-  }
-}
-
 export function ProtectedLayout() {
   const location = useLocation();
   const [authState, setAuthState] = useState<AuthCheckState>({ status: "loading" });
-  const [profileForm, setProfileForm] = useState<ProfileFormState>({
-    username: "",
-    email: "",
-    newPassword: "",
-  });
-  const [profileError, setProfileError] = useState<string | null>(null);
-  const [isSubmittingProfile, setIsSubmittingProfile] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -94,12 +52,6 @@ export function ProtectedLayout() {
         if (response.ok) {
           const user = (await response.json()) as AdminUser;
           setAuthState({ status: "authenticated", user });
-          setProfileForm({
-            username: user.username,
-            email: user.email ?? "",
-            newPassword: "",
-          });
-          setProfileError(null);
           return;
         }
 
@@ -127,104 +79,6 @@ export function ProtectedLayout() {
       controller.abort();
     };
   }, []);
-
-  async function ensureCsrfToken() {
-    const cachedToken = sessionStorage.getItem(CSRF_STORAGE_KEY);
-
-    if (cachedToken) {
-      return cachedToken;
-    }
-
-    const response = await fetch("/api/admin/auth/csrf", {
-      method: "POST",
-      credentials: "include",
-    });
-
-    const payload = (await response.json().catch(() => null)) as CsrfResponse & { message?: string } | null;
-
-    if (!response.ok || !payload?.csrf_token) {
-      if (response.status === 401) {
-        setAuthState({ status: "unauthenticated" });
-      }
-      throw new Error(mapProfileSetupErrorMessage(payload?.message));
-    }
-
-    sessionStorage.setItem(CSRF_STORAGE_KEY, payload.csrf_token);
-    return payload.csrf_token;
-  }
-
-  async function handleProfileSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (authState.status !== "authenticated" || isSubmittingProfile) {
-      return;
-    }
-
-    const username = profileForm.username.trim();
-    const email = profileForm.email.trim();
-    const newPassword = profileForm.newPassword;
-    const mustRequirePassword = authState.user.must_change_password;
-    const mustRequireUsernameChange = authState.user.must_change_username;
-    const mustRequireEmail = requiresEmail(authState.user);
-
-    if (!username) {
-      setProfileError("请输入用户名。");
-      return;
-    }
-
-    if (mustRequireEmail && !email) {
-      setProfileError("请输入邮箱。");
-      return;
-    }
-
-    if (mustRequirePassword && !newPassword) {
-      setProfileError("请设置新密码。");
-      return;
-    }
-
-    setIsSubmittingProfile(true);
-    setProfileError(null);
-
-    try {
-      const csrfToken = await ensureCsrfToken();
-      const response = await fetch("/api/admin/users/me", {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": csrfToken,
-        },
-        body: JSON.stringify({
-          username,
-          email,
-          ...(mustRequirePassword ? { new_password: newPassword } : {}),
-        }),
-      });
-
-      const payload = (await response.json().catch(() => null)) as AdminUser & { message?: string } | null;
-
-      if (!response.ok || !payload) {
-        if (response.status === 401) {
-          setAuthState({ status: "unauthenticated" });
-          return;
-        }
-
-        throw new Error(mapProfileSetupErrorMessage(payload?.message));
-      }
-
-      setAuthState({ status: "authenticated", user: payload });
-      setProfileForm({
-        username: payload.username,
-        email: payload.email ?? "",
-        newPassword: "",
-      });
-      setProfileError(null);
-    } catch (error) {
-      setProfileError(error instanceof Error ? error.message : "资料更新失败，请稍后重试。");
-    } finally {
-      setIsSubmittingProfile(false);
-    }
-  }
 
   if (authState.status === "loading") {
     return (
@@ -271,13 +125,96 @@ export function ProtectedLayout() {
   }
 
   const mustRequireUsernameChange = authState.user.must_change_username;
-  const mustRequireEmail = requiresEmail(authState.user);
-  const mustRequirePassword = authState.user.must_change_password;
+
+  return (
+    <AdminSessionProvider
+      user={authState.user}
+      onUserChange={user => setAuthState({ status: "authenticated", user })}
+      onUnauthenticated={() => setAuthState({ status: "unauthenticated" })}
+    >
+      <ProtectedLayoutContent mustRequireUsernameChange={mustRequireUsernameChange} />
+    </AdminSessionProvider>
+  );
+}
+
+type ProtectedLayoutContentProps = {
+  mustRequireUsernameChange: boolean;
+};
+
+function ProtectedLayoutContent({ mustRequireUsernameChange }: ProtectedLayoutContentProps) {
+  const { updateProfile, user } = useAdminSession();
+  const [profileForm, setProfileForm] = useState<ProfileFormState>({
+    username: user.username,
+    email: user.email ?? "",
+    currentPassword: "",
+    newPassword: "",
+  });
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [isSubmittingProfile, setIsSubmittingProfile] = useState(false);
+
+  useEffect(() => {
+    setProfileForm({
+      username: user.username,
+      email: user.email ?? "",
+      currentPassword: "",
+      newPassword: "",
+    });
+    setProfileError(null);
+  }, [user.email, user.username]);
+
+  async function handleProfileSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (isSubmittingProfile) {
+      return;
+    }
+
+    const username = profileForm.username.trim();
+    const email = profileForm.email.trim();
+    const newPassword = profileForm.newPassword;
+    const mustRequirePassword = user.must_change_password;
+    const mustRequireEmail = requiresEmail(user);
+
+    if (!username) {
+      setProfileError("请输入用户名。");
+      return;
+    }
+
+    if (mustRequireEmail && !email) {
+      setProfileError("请输入邮箱。");
+      return;
+    }
+
+    if (mustRequirePassword && !newPassword) {
+      setProfileError("请设置新密码。");
+      return;
+    }
+
+    setIsSubmittingProfile(true);
+    setProfileError(null);
+
+    try {
+      await updateProfile({
+        username,
+        email,
+        ...(mustRequirePassword ? { newPassword } : {}),
+      });
+      setProfileForm(current => ({
+        ...current,
+        currentPassword: "",
+        newPassword: "",
+      }));
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : mapAdminProfileErrorMessage());
+    } finally {
+      setIsSubmittingProfile(false);
+    }
+  }
 
   return (
     <>
       <Outlet />
-      {requiresProfileSetup(authState.user) ? (
+      {requiresProfileSetup(user) ? (
         <Dialog open onOpenChange={() => undefined}>
           <DialogContent
             showCloseButton={false}
@@ -296,7 +233,7 @@ export function ProtectedLayout() {
                 <Field
                   data-invalid={
                     (Boolean(profileError) && !profileForm.username.trim()) ||
-                    (mustRequireUsernameChange && profileForm.username.trim() === authState.user.username)
+                    (mustRequireUsernameChange && profileForm.username.trim() === user.username)
                   }
                 >
                   <FieldLabel htmlFor="setup-username">用户名</FieldLabel>
@@ -306,24 +243,24 @@ export function ProtectedLayout() {
                     value={profileForm.username}
                     aria-invalid={
                       (Boolean(profileError) && !profileForm.username.trim()) ||
-                      (mustRequireUsernameChange && profileForm.username.trim() === authState.user.username)
+                      (mustRequireUsernameChange && profileForm.username.trim() === user.username)
                     }
                     onChange={event => setProfileForm(current => ({ ...current, username: event.target.value }))}
                   />
                 </Field>
 
-                <Field data-invalid={Boolean(profileError) && mustRequireEmail && !profileForm.email.trim()}>
+                <Field data-invalid={Boolean(profileError) && requiresEmail(user) && !profileForm.email.trim()}>
                   <FieldLabel htmlFor="setup-email">邮箱</FieldLabel>
                   <Input
                     id="setup-email"
                     type="email"
                     value={profileForm.email}
-                    aria-invalid={Boolean(profileError) && mustRequireEmail && !profileForm.email.trim()}
+                    aria-invalid={Boolean(profileError) && requiresEmail(user) && !profileForm.email.trim()}
                     onChange={event => setProfileForm(current => ({ ...current, email: event.target.value }))}
                   />
                 </Field>
 
-                {mustRequirePassword ? (
+                {user.must_change_password ? (
                   <Field data-invalid={Boolean(profileError) && !profileForm.newPassword}>
                     <FieldLabel htmlFor="setup-password">新密码</FieldLabel>
                     <Input
