@@ -26,7 +26,7 @@ pub fn router() -> Router {
         .push(Router::new().get(list))
         .push(Router::with_path("me").hoop(require_csrf).patch(update_me))
         .push(
-            Router::with_path("<id>/status")
+            Router::with_path("{id}/status")
                 .hoop(require_csrf)
                 .patch(set_status),
         )
@@ -166,6 +166,9 @@ async fn update_me(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 /// - 禁用系统中的最后一个 `owner`
 #[endpoint(
     tags("admin.users"),
+    parameters(
+        ("id" = i64, Path, description = "目标管理员用户 ID")
+    ),
     request_body = SetUserStatusRequest,
     responses(
         (status_code = 200, description = "更新用户状态成功", body = crate::admin::dto::users::AdminUserView),

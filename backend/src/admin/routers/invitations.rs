@@ -24,7 +24,7 @@ pub fn router() -> Router {
         .hoop(require_completed_profile)
         .push(Router::new().get(list))
         .push(Router::new().hoop(require_csrf).post(create))
-        .push(Router::with_path("<id>").hoop(require_csrf).delete(revoke))
+        .push(Router::with_path("{id}").hoop(require_csrf).delete(revoke))
 }
 
 /// 获取邀请码列表
@@ -136,6 +136,9 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) {
 /// 仅 `owner` 可调用。只有 `pending` 状态的邀请码允许被撤销
 #[endpoint(
     tags("admin.invitations"),
+    parameters(
+        ("id" = i64, Path, description = "邀请码记录 ID")
+    ),
     responses(
         (status_code = 200, description = "撤销邀请码成功"),
         (status_code = 400, description = "邀请码 ID 无效"),

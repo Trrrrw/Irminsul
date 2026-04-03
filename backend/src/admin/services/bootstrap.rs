@@ -1,20 +1,17 @@
 use std::str::FromStr;
 
+use sea_orm::Value;
+
 use crate::admin::{
     db,
     model::{AdminRole, AdminUserStatus},
     password::{generate_temporary_password, generate_temporary_username, hash_password},
-    services::embedding,
+    repository,
 };
 
 /// 确保系统至少存在一个 owner 账号。
 pub async fn ensure_initial_owner() {
-    let _ = embedding::ensure_embedding_settings().await;
-    let Ok(conn) = db::database().connect() else {
-        return;
-    };
-
-    if has_owner(&conn).await {
+    if has_owner(db::database()).await {
         return;
     }
 
@@ -36,18 +33,19 @@ pub async fn ensure_initial_owner() {
     let must_change_username = env_username.is_none();
     let must_change_password = env_password.is_none();
 
-    conn.execute(
+    repository::execute(
+        db::database(),
         "INSERT INTO ADMIN_USERS
          (username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at)
          VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, 1, NULL, ?7, ?7)",
-        turso::params![
-            username.clone(),
-            password_hash,
-            AdminRole::Owner.as_str(),
-            AdminUserStatus::Active.as_str(),
-            if must_change_password { 1 } else { 0 },
-            if must_change_username { 1 } else { 0 },
-            now,
+        vec![
+            Value::from(username.clone()),
+            Value::from(password_hash),
+            Value::from(AdminRole::Owner.as_str()),
+            Value::from(AdminUserStatus::Active.as_str()),
+            Value::from(if must_change_password { 1 } else { 0 }),
+            Value::from(if must_change_username { 1 } else { 0 }),
+            Value::from(now),
         ],
     )
     .await
@@ -70,23 +68,18 @@ pub async fn ensure_initial_owner() {
     }
 }
 
-async fn has_owner(conn: &turso::Connection) -> bool {
-    let Ok(mut rows) = conn
-        .query(
-            "SELECT role FROM ADMIN_USERS WHERE role = ?1 LIMIT 1",
-            turso::params![AdminRole::Owner.as_str()],
-        )
-        .await
+async fn has_owner(db: &sea_orm::DatabaseConnection) -> bool {
+    let Ok(row) = repository::query_one(
+        db,
+        "SELECT role FROM ADMIN_USERS WHERE role = ?1 LIMIT 1",
+        vec![Value::from(AdminRole::Owner.as_str())],
+    )
+    .await
     else {
         return false;
     };
 
-    match rows.next().await {
-        Ok(Some(row)) => row
-            .get::<String>(0)
-            .ok()
-            .and_then(|role| AdminRole::from_str(&role).ok())
-            .is_some_and(|role| role == AdminRole::Owner),
-        _ => false,
-    }
+    row.and_then(|value| value.try_get::<String>("", "role").ok())
+        .and_then(|role| AdminRole::from_str(&role).ok())
+        .is_some_and(|role| role == AdminRole::Owner)
 }

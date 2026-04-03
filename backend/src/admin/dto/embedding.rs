@@ -4,20 +4,16 @@ use serde::{Deserialize, Serialize};
 /// Embedding 提供方视图。
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct EmbeddingProviderView {
-    pub id: i64,
     pub code: String,
     pub name: String,
     pub base_url: String,
     pub embeddings_path: String,
     pub enabled: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
 }
 
 /// 设置页中的 embedding 提供方写入项。
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct EmbeddingProviderInput {
-    pub id: Option<i64>,
     pub code: String,
     pub name: String,
     pub base_url: String,
@@ -28,20 +24,18 @@ pub struct EmbeddingProviderInput {
 /// Embedding API key 视图。
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct EmbeddingApiKeyView {
-    pub id: i64,
-    pub provider_id: i64,
+    pub id: String,
+    pub provider_code: String,
     pub name: String,
     pub masked_api_key: String,
     pub enabled: bool,
-    pub created_at: i64,
-    pub updated_at: i64,
 }
 
 /// 设置页中的 embedding API key 写入项。
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct EmbeddingApiKeyInput {
-    pub id: Option<i64>,
-    pub provider_id: i64,
+    pub id: Option<String>,
+    pub provider_code: String,
     pub name: String,
     pub api_key: Option<String>,
     pub enabled: bool,
@@ -50,7 +44,7 @@ pub struct EmbeddingApiKeyInput {
 /// Embedding 设置视图。
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct EmbeddingSettingsView {
-    pub default_provider_id: Option<i64>,
+    pub default_provider: Option<String>,
     pub current_model: String,
     pub updated_at: i64,
 }
@@ -72,7 +66,7 @@ pub struct AdminSettingsView {
 /// 更新 embedding 设置请求。
 #[derive(Clone, Debug, Deserialize, ToSchema)]
 pub struct UpdateEmbeddingSettingsRequest {
-    pub default_provider_id: Option<i64>,
+    pub default_provider: Option<String>,
     pub current_model: String,
 }
 

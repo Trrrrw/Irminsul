@@ -1,10 +1,11 @@
-use std::str::FromStr;
+use sea_orm::Value;
 
 use crate::admin::{
     db,
     dto::invitations::InvitationView,
     entities::invitations,
     model::{AdminRole, InvitationStatus},
+    repository,
     services::audit::write_audit_log,
     token::{generate_token, hash_token},
 };
@@ -25,28 +26,33 @@ pub async fn create_invitation(
     let invitation_token = generate_token(32);
     let now = crate::admin::middlewares::auth::unix_timestamp();
     let expires_at = now + expires_in_hours.unwrap_or(24 * 7).clamp(1, 24 * 30) * 3600;
-    let conn = db::database().connect().map_err(|_| "db_unavailable")?;
 
-    conn.execute(
+    repository::execute(
+        db::database(),
         "INSERT INTO ADMIN_INVITATIONS
          (token_hash, role, status, invited_email, note, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id)
          VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, NULL, NULL)",
-        turso::params![
-            hash_token(&invitation_token),
-            role.as_str(),
-            InvitationStatus::Pending.as_str(),
-            note,
-            actor_user_id,
-            now,
-            expires_at,
+        vec![
+            Value::from(hash_token(&invitation_token)),
+            Value::from(role.as_str()),
+            Value::from(InvitationStatus::Pending.as_str()),
+            Value::from(note),
+            Value::from(actor_user_id),
+            Value::from(now),
+            Value::from(expires_at),
         ],
     )
     .await
     .map_err(|_| "invitation_create_failed")?;
 
-    let invitation = find_invitation_by_id(&conn, conn.last_insert_rowid())
-        .await
-        .ok_or("invitation_create_failed")?;
+    let invitation = find_invitation_by_id(
+        db::database(),
+        repository::last_insert_rowid(db::database())
+            .await
+            .map_err(|_| "invitation_create_failed")?,
+    )
+    .await
+    .ok_or("invitation_create_failed")?;
 
     write_audit_log(
         Some(actor_user_id),
@@ -66,37 +72,31 @@ pub async fn create_invitation(
 
 /// 列出邀请码。
 pub async fn list_invitations() -> Vec<InvitationView> {
-    let Ok(conn) = db::database().connect() else {
-        return Vec::new();
-    };
-    let Ok(mut rows) = conn
-        .query(
-            "SELECT id, token_hash, role, status, invited_email, note, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id
-             FROM ADMIN_INVITATIONS ORDER BY id DESC",
-            (),
-        )
-        .await
+    let Ok(rows) = repository::query_all(
+        db::database(),
+        "SELECT id, token_hash, role, status, invited_email, note, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id
+         FROM ADMIN_INVITATIONS ORDER BY id DESC",
+        Vec::new(),
+    )
+    .await
     else {
         return Vec::new();
     };
 
-    let mut values = Vec::new();
-    while let Ok(Some(row)) = rows.next().await {
-        if let Ok(invitation) = map_invitation_row(&row) {
-            values.push(InvitationView {
-                id: invitation.id,
-                role: invitation.role,
-                status: invitation.status,
-                note: invitation.note,
-                created_by_user_id: invitation.created_by_user_id,
-                created_at: invitation.created_at,
-                expires_at: invitation.expires_at,
-                consumed_at: invitation.consumed_at,
-                consumed_by_user_id: invitation.consumed_by_user_id,
-            });
-        }
-    }
-    values
+    rows.iter()
+        .filter_map(|row| repository::map_invitation_row(row).ok())
+        .map(|invitation| InvitationView {
+            id: invitation.id,
+            role: invitation.role,
+            status: invitation.status,
+            note: invitation.note,
+            created_by_user_id: invitation.created_by_user_id,
+            created_at: invitation.created_at,
+            expires_at: invitation.expires_at,
+            consumed_at: invitation.consumed_at,
+            consumed_by_user_id: invitation.consumed_by_user_id,
+        })
+        .collect()
 }
 
 /// 撤销邀请码。
@@ -106,17 +106,20 @@ pub async fn revoke_invitation(
     ip: Option<String>,
     user_agent: Option<String>,
 ) -> Result<(), &'static str> {
-    let conn = db::database().connect().map_err(|_| "db_unavailable")?;
-    let invitation = find_invitation_by_id(&conn, invitation_id)
+    let invitation = find_invitation_by_id(db::database(), invitation_id)
         .await
         .ok_or("invitation_not_found")?;
     if invitation.status != InvitationStatus::Pending {
         return Err("invitation_not_pending");
     }
 
-    conn.execute(
+    repository::execute(
+        db::database(),
         "UPDATE ADMIN_INVITATIONS SET status = ?1 WHERE id = ?2",
-        turso::params![InvitationStatus::Revoked.as_str(), invitation_id],
+        vec![
+            Value::from(InvitationStatus::Revoked.as_str()),
+            Value::from(invitation_id),
+        ],
     )
     .await
     .map_err(|_| "invitation_revoke_failed")?;
@@ -137,38 +140,17 @@ pub async fn revoke_invitation(
     Ok(())
 }
 
-async fn find_invitation_by_id(
-    conn: &turso::Connection,
+pub async fn find_invitation_by_id(
+    db: &sea_orm::DatabaseConnection,
     invitation_id: i64,
 ) -> Option<invitations::Model> {
-    let mut rows = conn
-        .query(
-            "SELECT id, token_hash, role, status, invited_email, note, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id
-             FROM ADMIN_INVITATIONS WHERE id = ?1 LIMIT 1",
-            turso::params![invitation_id],
-        )
-        .await
-        .ok()?;
-    let row = rows.next().await.ok().flatten()?;
-    map_invitation_row(&row).ok()
-}
-
-fn map_invitation_row(row: &turso::Row) -> Result<invitations::Model, String> {
-    Ok(invitations::Model {
-        id: row.get(0).map_err(|error| error.to_string())?,
-        token_hash: row.get(1).map_err(|error| error.to_string())?,
-        role: AdminRole::from_str(&row.get::<String>(2).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?,
-        status: InvitationStatus::from_str(
-            &row.get::<String>(3).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?,
-        invited_email: row.get(4).map_err(|error| error.to_string())?,
-        note: row.get(5).map_err(|error| error.to_string())?,
-        created_by_user_id: row.get(6).map_err(|error| error.to_string())?,
-        created_at: row.get(7).map_err(|error| error.to_string())?,
-        expires_at: row.get(8).map_err(|error| error.to_string())?,
-        consumed_at: row.get(9).map_err(|error| error.to_string())?,
-        consumed_by_user_id: row.get(10).map_err(|error| error.to_string())?,
-    })
+    let row = repository::query_one(
+        db,
+        "SELECT id, token_hash, role, status, invited_email, note, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id
+         FROM ADMIN_INVITATIONS WHERE id = ?1 LIMIT 1",
+        vec![Value::from(invitation_id)],
+    )
+    .await
+    .ok()??;
+    repository::map_invitation_row(&row).ok()
 }

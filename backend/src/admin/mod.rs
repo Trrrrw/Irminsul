@@ -5,6 +5,7 @@ pub mod errors;
 pub mod middlewares;
 pub mod model;
 pub mod password;
+pub mod repository;
 pub mod routers;
 pub mod services;
 pub mod token;

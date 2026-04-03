@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use sea_orm::Value;
 
 use crate::admin::{
     db,
@@ -6,32 +6,27 @@ use crate::admin::{
     entities::users,
     model::{AdminRole, AdminUserStatus},
     password::{hash_password, verify_password},
+    repository,
     services::audit::write_audit_log,
 };
 
 /// 列出管理员。
 pub async fn list_users() -> Vec<AdminUserView> {
-    let Ok(conn) = db::database().connect() else {
-        return Vec::new();
-    };
-    let Ok(mut rows) = conn
-        .query(
-            "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
-             FROM ADMIN_USERS ORDER BY id ASC",
-            (),
-        )
-        .await
+    let Ok(rows) = repository::query_all(
+        db::database(),
+        "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
+         FROM ADMIN_USERS ORDER BY id ASC",
+        Vec::new(),
+    )
+    .await
     else {
         return Vec::new();
     };
 
-    let mut values = Vec::new();
-    while let Ok(Some(row)) = rows.next().await {
-        if let Ok(user) = map_user_row(&row) {
-            values.push(AdminUserView::from(user));
-        }
-    }
-    values
+    rows.iter()
+        .filter_map(|row| repository::map_user_row(row).ok())
+        .map(AdminUserView::from)
+        .collect()
 }
 
 /// 启用或禁用管理员。
@@ -43,8 +38,7 @@ pub async fn set_user_enabled(
     ip: Option<String>,
     user_agent: Option<String>,
 ) -> Result<users::Model, &'static str> {
-    let conn = db::database().connect().map_err(|_| "db_unavailable")?;
-    let user = find_user_by_id(&conn, target_user_id)
+    let user = find_user_by_id(db::database(), target_user_id)
         .await
         .ok_or("user_not_found")?;
 
@@ -54,7 +48,7 @@ pub async fn set_user_enabled(
     if user.role == AdminRole::Owner && actor_role != &AdminRole::Owner {
         return Err("owner_management_forbidden");
     }
-    if !enabled && user.role == AdminRole::Owner && owner_count(&conn).await <= 1 {
+    if !enabled && user.role == AdminRole::Owner && owner_count(db::database()).await <= 1 {
         return Err("cannot_disable_last_owner");
     }
 
@@ -64,14 +58,19 @@ pub async fn set_user_enabled(
         AdminUserStatus::Disabled
     };
     let now = crate::admin::middlewares::auth::unix_timestamp();
-    conn.execute(
+    repository::execute(
+        db::database(),
         "UPDATE ADMIN_USERS SET status = ?1, updated_at = ?2 WHERE id = ?3",
-        turso::params![next_status.as_str(), now, target_user_id],
+        vec![
+            Value::from(next_status.as_str()),
+            Value::from(now),
+            Value::from(target_user_id),
+        ],
     )
     .await
     .map_err(|_| "user_status_update_failed")?;
 
-    let user = find_user_by_id(&conn, target_user_id)
+    let user = find_user_by_id(db::database(), target_user_id)
         .await
         .ok_or("user_status_update_failed")?;
 
@@ -107,8 +106,7 @@ pub async fn update_self_profile(
     current_user_id: i64,
     payload: UpdateSelfProfileRequest,
 ) -> Result<users::Model, &'static str> {
-    let conn = db::database().connect().map_err(|_| "db_unavailable")?;
-    let user = find_user_by_id(&conn, current_user_id)
+    let user = find_user_by_id(db::database(), current_user_id)
         .await
         .ok_or("user_not_found")?;
 
@@ -157,25 +155,26 @@ pub async fn update_self_profile(
         };
 
     let now = crate::admin::middlewares::auth::unix_timestamp();
-    conn.execute(
+    repository::execute(
+        db::database(),
         "UPDATE ADMIN_USERS
          SET username = ?1, email = ?2, password_hash = ?3, must_change_password = ?4, must_change_username = ?5, must_set_email = ?6, updated_at = ?7
          WHERE id = ?8",
-        turso::params![
-            new_username,
-            new_email.clone(),
-            password_hash,
-            if must_change_password { 1 } else { 0 },
-            0,
-            if new_email.is_some() { 0 } else { user.must_set_email as i64 },
-            now,
-            current_user_id,
+        vec![
+            Value::from(new_username),
+            Value::from(new_email.clone()),
+            Value::from(password_hash),
+            Value::from(if must_change_password { 1 } else { 0 }),
+            Value::from(0),
+            Value::from(if new_email.is_some() { 0 } else { user.must_set_email as i64 }),
+            Value::from(now),
+            Value::from(current_user_id),
         ],
     )
     .await
     .map_err(|_| "profile_update_failed")?;
 
-    find_user_by_id(&conn, current_user_id)
+    find_user_by_id(db::database(), current_user_id)
         .await
         .ok_or("profile_update_failed")
 }
@@ -189,53 +188,35 @@ fn normalize_optional_email(value: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-async fn owner_count(conn: &turso::Connection) -> i64 {
-    let Ok(mut rows) = conn
-        .query(
-            "SELECT COUNT(*) FROM ADMIN_USERS WHERE role = ?1 AND status = ?2",
-            turso::params![AdminRole::Owner.as_str(), AdminUserStatus::Active.as_str()],
-        )
-        .await
+async fn owner_count(db: &sea_orm::DatabaseConnection) -> i64 {
+    let Ok(row) = repository::query_one(
+        db,
+        "SELECT COUNT(*) AS count FROM ADMIN_USERS WHERE role = ?1 AND status = ?2",
+        vec![
+            Value::from(AdminRole::Owner.as_str()),
+            Value::from(AdminUserStatus::Active.as_str()),
+        ],
+    )
+    .await
     else {
         return 0;
     };
 
-    match rows.next().await {
-        Ok(Some(row)) => row.get(0).unwrap_or(0),
-        _ => 0,
-    }
+    row.and_then(|value| value.try_get::<i64>("", "count").ok())
+        .unwrap_or_default()
 }
 
-async fn find_user_by_id(conn: &turso::Connection, user_id: i64) -> Option<users::Model> {
-    let mut rows = conn
-        .query(
-            "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
-             FROM ADMIN_USERS WHERE id = ?1 LIMIT 1",
-            turso::params![user_id],
-        )
-        .await
-        .ok()?;
-    let row = rows.next().await.ok().flatten()?;
-    map_user_row(&row).ok()
-}
-
-fn map_user_row(row: &turso::Row) -> Result<users::Model, String> {
-    Ok(users::Model {
-        id: row.get(0).map_err(|error| error.to_string())?,
-        username: row.get(1).map_err(|error| error.to_string())?,
-        email: row.get(2).map_err(|error| error.to_string())?,
-        password_hash: row.get(3).map_err(|error| error.to_string())?,
-        role: AdminRole::from_str(&row.get::<String>(4).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?,
-        status: AdminUserStatus::from_str(
-            &row.get::<String>(5).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?,
-        must_change_password: row.get::<i64>(6).map_err(|error| error.to_string())? != 0,
-        must_change_username: row.get::<i64>(7).map_err(|error| error.to_string())? != 0,
-        must_set_email: row.get::<i64>(8).map_err(|error| error.to_string())? != 0,
-        last_login_at: row.get(9).map_err(|error| error.to_string())?,
-        created_at: row.get(10).map_err(|error| error.to_string())?,
-        updated_at: row.get(11).map_err(|error| error.to_string())?,
-    })
+pub async fn find_user_by_id(
+    db: &sea_orm::DatabaseConnection,
+    user_id: i64,
+) -> Option<users::Model> {
+    let row = repository::query_one(
+        db,
+        "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
+         FROM ADMIN_USERS WHERE id = ?1 LIMIT 1",
+        vec![Value::from(user_id)],
+    )
+    .await
+    .ok()??;
+    repository::map_user_row(&row).ok()
 }

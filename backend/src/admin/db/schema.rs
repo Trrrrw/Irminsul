@@ -47,37 +47,6 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     )
     "#,
     r#"
-    CREATE TABLE IF NOT EXISTS EMBEDDING_PROVIDERS (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT NOT NULL UNIQUE,
-        name TEXT NOT NULL,
-        base_url TEXT NOT NULL,
-        embeddings_path TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-    )
-    "#,
-    r#"
-    CREATE TABLE IF NOT EXISTS EMBEDDING_API_KEYS (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        provider_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        api_key TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-    )
-    "#,
-    r#"
-    CREATE TABLE IF NOT EXISTS EMBEDDING_SETTINGS (
-        id INTEGER PRIMARY KEY,
-        default_provider_id INTEGER,
-        current_model TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-    )
-    "#,
-    r#"
     CREATE TABLE IF NOT EXISTS AUDIT_LOGS (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         actor_type TEXT NOT NULL,

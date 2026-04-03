@@ -1,1 +1,1 @@
-pub use crate::content::dto::content::*;
+pub use crate::catalog::dto::*;

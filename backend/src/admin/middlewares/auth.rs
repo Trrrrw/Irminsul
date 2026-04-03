@@ -1,12 +1,12 @@
-use std::str::FromStr;
-
 use salvo::prelude::*;
+use sea_orm::Value;
 
 use crate::admin::{
     db,
-    entities::{sessions, users},
-    model::{AdminRole, AdminUserStatus},
-    services::auth::{client_ip, user_agent},
+    entities::sessions,
+    model::AdminRole,
+    repository,
+    services::{auth::client_ip, users::find_user_by_id},
 };
 
 pub const ADMIN_SESSION_COOKIE: &str = "irminsul_admin_session";
@@ -79,18 +79,7 @@ pub async fn require_authenticated_admin(
 
     let token_hash = crate::admin::token::hash_token(cookie.value());
     let now = unix_timestamp();
-    let Ok(conn) = db::database().connect() else {
-        crate::admin::errors::render_api_error(
-            res,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "db_unavailable",
-            "database unavailable",
-        );
-        ctrl.skip_rest();
-        return;
-    };
-
-    let Some(session) = find_session_by_token(&conn, &token_hash, now).await else {
+    let Some(session) = find_session_by_token(db::database(), &token_hash, now).await else {
         crate::admin::errors::render_api_error(
             res,
             StatusCode::UNAUTHORIZED,
@@ -101,7 +90,7 @@ pub async fn require_authenticated_admin(
         return;
     };
 
-    let Some(user) = find_user_by_id(&conn, session.admin_user_id).await else {
+    let Some(user) = find_user_by_id(db::database(), session.admin_user_id).await else {
         crate::admin::errors::render_api_error(
             res,
             StatusCode::UNAUTHORIZED,
@@ -112,7 +101,7 @@ pub async fn require_authenticated_admin(
         return;
     };
 
-    if user.status != AdminUserStatus::Active {
+    if user.status != crate::admin::model::AdminUserStatus::Active {
         crate::admin::errors::render_api_error(
             res,
             StatusCode::FORBIDDEN,
@@ -137,7 +126,6 @@ pub async fn require_authenticated_admin(
     );
     depot.insert(DEPOT_ADMIN_SESSION, session);
 
-    let _ = user_agent(req);
     let _ = client_ip(req);
 }
 
@@ -180,74 +168,20 @@ pub async fn require_completed_profile(
     }
 }
 
-async fn find_session_by_token(
-    conn: &turso::Connection,
+pub async fn find_session_by_token(
+    db: &sea_orm::DatabaseConnection,
     token_hash: &str,
     now: i64,
 ) -> Option<sessions::Model> {
-    let mut rows = conn
-        .query(
-            "SELECT id, admin_user_id, token_hash, csrf_token_hash, created_at, updated_at, expires_at, last_seen_at, revoked_at, created_ip, last_seen_ip, user_agent
-             FROM ADMIN_SESSIONS
-             WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2
-             LIMIT 1",
-            turso::params![token_hash.to_string(), now],
-        )
-        .await
-        .ok()?;
-
-    let row = rows.next().await.ok().flatten()?;
-    map_session_row(&row).ok()
-}
-
-async fn find_user_by_id(conn: &turso::Connection, user_id: i64) -> Option<users::Model> {
-    let mut rows = conn
-        .query(
-            "SELECT id, username, email, password_hash, role, status, must_change_password, must_change_username, must_set_email, last_login_at, created_at, updated_at
-             FROM ADMIN_USERS WHERE id = ?1 LIMIT 1",
-            turso::params![user_id],
-        )
-        .await
-        .ok()?;
-
-    let row = rows.next().await.ok().flatten()?;
-    map_user_row(&row).ok()
-}
-
-fn map_session_row(row: &turso::Row) -> Result<sessions::Model, String> {
-    Ok(sessions::Model {
-        id: row.get(0).map_err(|error| error.to_string())?,
-        admin_user_id: row.get(1).map_err(|error| error.to_string())?,
-        token_hash: row.get(2).map_err(|error| error.to_string())?,
-        csrf_token_hash: row.get(3).map_err(|error| error.to_string())?,
-        created_at: row.get(4).map_err(|error| error.to_string())?,
-        updated_at: row.get(5).map_err(|error| error.to_string())?,
-        expires_at: row.get(6).map_err(|error| error.to_string())?,
-        last_seen_at: row.get(7).map_err(|error| error.to_string())?,
-        revoked_at: row.get(8).map_err(|error| error.to_string())?,
-        created_ip: row.get(9).map_err(|error| error.to_string())?,
-        last_seen_ip: row.get(10).map_err(|error| error.to_string())?,
-        user_agent: row.get(11).map_err(|error| error.to_string())?,
-    })
-}
-
-fn map_user_row(row: &turso::Row) -> Result<users::Model, String> {
-    Ok(users::Model {
-        id: row.get(0).map_err(|error| error.to_string())?,
-        username: row.get(1).map_err(|error| error.to_string())?,
-        email: row.get(2).map_err(|error| error.to_string())?,
-        password_hash: row.get(3).map_err(|error| error.to_string())?,
-        role: AdminRole::from_str(&row.get::<String>(4).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?,
-        status: AdminUserStatus::from_str(
-            &row.get::<String>(5).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?,
-        must_change_password: row.get::<i64>(6).map_err(|error| error.to_string())? != 0,
-        must_change_username: row.get::<i64>(7).map_err(|error| error.to_string())? != 0,
-        must_set_email: row.get::<i64>(8).map_err(|error| error.to_string())? != 0,
-        last_login_at: row.get(9).map_err(|error| error.to_string())?,
-        created_at: row.get(10).map_err(|error| error.to_string())?,
-        updated_at: row.get(11).map_err(|error| error.to_string())?,
-    })
+    let row = repository::query_one(
+        db,
+        "SELECT id, admin_user_id, token_hash, csrf_token_hash, created_at, updated_at, expires_at, last_seen_at, revoked_at, created_ip, last_seen_ip, user_agent
+         FROM ADMIN_SESSIONS
+         WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2
+         LIMIT 1",
+        vec![Value::from(token_hash.to_string()), Value::from(now)],
+    )
+    .await
+    .ok()??;
+    repository::map_session_row(&row).ok()
 }
