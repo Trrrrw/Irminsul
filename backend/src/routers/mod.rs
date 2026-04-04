@@ -7,6 +7,7 @@ use salvo::{
 };
 
 mod admin;
+mod api_routes;
 mod hello;
 mod mcp;
 
@@ -34,22 +35,25 @@ fn admin_doc_tags() -> [Tag; 3] {
 #[folder = "assets"]
 struct Assets;
 
+pub fn list_business_api_routes() -> Vec<api_routes::ApiRoute> {
+    api_routes::collect_routes(&business_api_router())
+}
+
 pub fn root() -> Router {
     let favicon = Assets::get("favicon.ico")
         .expect("favicon not found")
         .into_handler();
-    let public_router = Router::new()
-        .hoop(Logger::new())
-        .push(admin::static_router())
-        .push(mcp::router())
-        .push(hello::router())
-        .push(Router::with_path("favicon.ico").get(favicon))
-        .push(Router::with_path("assets/{**rest}").get(static_embed::<Assets>()));
+    let public_business_router = public_business_router();
     let admin_router = crate::admin::routers::router();
 
-    let public_doc =
-        OpenApi::new("Irminsul API", env!("CARGO_PKG_VERSION")).merge_router(&public_router);
-    let mut router = public_router
+    let public_doc = OpenApi::new("Irminsul API", env!("CARGO_PKG_VERSION"))
+        .merge_router(&public_business_router);
+    let mut router = Router::new()
+        .hoop(Logger::new())
+        .push(admin::static_router())
+        .push(public_business_router)
+        .push(Router::with_path("favicon.ico").get(favicon))
+        .push(Router::with_path("assets/{**rest}").get(static_embed::<Assets>()))
         .push(public_doc.into_router("/api-doc/public/openapi.json"))
         .push(Scalar::new("/api-doc/public/openapi.json").into_router("docs"));
 
@@ -66,4 +70,87 @@ pub fn root() -> Router {
     }
 
     router
+}
+
+fn public_business_router() -> Router {
+    Router::new()
+        .push(api_routes::router())
+        .push(mcp::router())
+        .push(hello::router())
+}
+
+fn business_api_router() -> Router {
+    Router::new()
+        .push(public_business_router())
+        .push(crate::admin::routers::router())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::list_business_api_routes;
+    use salvo::{
+        Service,
+        http::StatusCode,
+        test::{ResponseExt, TestClient},
+    };
+
+    fn contains_route(routes: &[(String, String)], method: &str, path: &str) -> bool {
+        routes
+            .iter()
+            .any(|(current_method, current_path)| current_method == method && current_path == path)
+    }
+
+    #[test]
+    fn list_business_api_routes_contains_expected_routes_only() {
+        let routes = list_business_api_routes()
+            .into_iter()
+            .map(|route| (route.method, route.path))
+            .collect::<Vec<_>>();
+
+        assert!(contains_route(&routes, "GET", "/api/routes"));
+        assert!(contains_route(&routes, "GET", "/hello"));
+        assert!(contains_route(&routes, "POST", "/mcp"));
+        assert!(contains_route(&routes, "POST", "/api/admin/auth/login"));
+        assert!(contains_route(&routes, "PATCH", "/api/admin/users/me"));
+        assert!(contains_route(
+            &routes,
+            "PUT",
+            "/api/admin/manage/games/<id>/texts/<locale>"
+        ));
+        assert!(contains_route(
+            &routes,
+            "DELETE",
+            "/api/admin/manage/games/<id>/texts/<locale>"
+        ));
+
+        assert!(routes.iter().all(|(_, path)| !path.starts_with("/docs")));
+        assert!(routes.iter().all(|(_, path)| !path.starts_with("/api-doc")));
+        assert!(routes.iter().all(|(_, path)| !path.starts_with("/admin")));
+        assert!(routes.iter().all(|(_, path)| !path.starts_with("/assets")));
+        assert!(!contains_route(&routes, "GET", "/favicon.ico"));
+    }
+
+    #[tokio::test]
+    async fn api_routes_endpoint_returns_business_routes() {
+        let service = Service::new(super::root());
+
+        let mut response = TestClient::get("http://127.0.0.1:7040/api/routes")
+            .send(&service)
+            .await;
+
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+
+        let routes = response
+            .take_json::<Vec<super::api_routes::ApiRoute>>()
+            .await;
+        let routes = routes.expect("api routes response should be valid json");
+        let routes = routes
+            .into_iter()
+            .map(|route| (route.method, route.path))
+            .collect::<Vec<_>>();
+
+        assert!(contains_route(&routes, "GET", "/api/routes"));
+        assert!(contains_route(&routes, "POST", "/mcp"));
+        assert!(routes.iter().all(|(_, path)| !path.starts_with("/api-doc")));
+    }
 }
