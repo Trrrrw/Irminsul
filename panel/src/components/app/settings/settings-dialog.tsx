@@ -48,6 +48,15 @@ type SettingsDialogProps = {
   initialAccountError?: string | null;
 };
 
+export const SETTINGS_DIALOG_CLASS_NAMES = {
+  content:
+    "max-h-[calc(100dvh-1rem)] overflow-y-auto border-border/70 bg-card/95 p-0 shadow-2xl sm:max-w-4xl",
+  layout: "grid min-h-0 md:min-h-[36rem] md:grid-cols-[15rem_minmax(0,1fr)]",
+  generalSettingRow: "flex flex-col items-start gap-3 px-5 py-3.5 md:flex-row md:items-center md:justify-between md:gap-4",
+  generalSettingTitle: "flex items-center gap-2 whitespace-nowrap text-sm font-medium",
+  generalSettingControl: "w-full md:w-40",
+} as const;
+
 function readStoredValue<T extends string>(key: string, fallback: T) {
   if (typeof window === "undefined") {
     return fallback;
@@ -205,8 +214,8 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="overflow-hidden border-border/70 bg-card/95 p-0 shadow-2xl sm:max-w-4xl">
-        <div className="grid min-h-[36rem] md:grid-cols-[15rem_minmax(0,1fr)]">
+      <DialogContent className={SETTINGS_DIALOG_CLASS_NAMES.content}>
+        <div className={SETTINGS_DIALOG_CLASS_NAMES.layout}>
           <section className="border-b border-border/70 bg-muted/30 p-4 md:border-r md:border-b-0">
             <DialogHeader className="mb-5 px-0">
               <DialogTitle>系统设置</DialogTitle>
@@ -241,15 +250,15 @@ export function SettingsDialog({
                 <div className="grid gap-2.5">
                   {generalSettingsItems.map(item => (
                     <Card key={item.id} className="gap-0 border-border/70 py-0 shadow-none">
-                      <CardContent className="flex items-center justify-between gap-4 px-5 py-3.5">
-                        <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                      <CardContent className={SETTINGS_DIALOG_CLASS_NAMES.generalSettingRow}>
+                        <CardTitle className={SETTINGS_DIALOG_CLASS_NAMES.generalSettingTitle}>
                           {item.id === "language" ? <Languages className="size-4" /> : <Monitor className="size-4" />}
                           {item.label}
                         </CardTitle>
 
                         {item.id === "language" ? (
                           <Select value={language} onValueChange={value => setLanguage(value as LanguageOptionId)}>
-                            <SelectTrigger size="sm" className="w-full min-w-40 md:w-40">
+                            <SelectTrigger size="sm" className={SETTINGS_DIALOG_CLASS_NAMES.generalSettingControl}>
                               <SelectValue placeholder="选择语言" />
                             </SelectTrigger>
                             <SelectContent align="end">
@@ -262,7 +271,7 @@ export function SettingsDialog({
                           </Select>
                         ) : (
                           <Select value={themeMode} onValueChange={value => setThemeMode(value as ThemeMode)}>
-                            <SelectTrigger size="sm" className="w-full min-w-40 md:w-40">
+                            <SelectTrigger size="sm" className={SETTINGS_DIALOG_CLASS_NAMES.generalSettingControl}>
                               <SelectValue placeholder="选择主题" />
                             </SelectTrigger>
                             <SelectContent align="end">
